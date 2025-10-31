@@ -200,6 +200,7 @@ def draw_orderbook(screen, order_book, display_bids, display_asks, flash_bids, f
 
 def main():
     global TAKER_ID_COUNTER
+    global ORDER_ID_COUNTER
     global WIDTH, HEIGHT
     global LTP
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -287,6 +288,10 @@ def main():
     running = True
     view_mode = 'executed'
     view_scroll_offset = 0
+    # Demo playback state (step-by-step with 1s pause)
+    demo_running = False
+    demo_steps_left = 0
+    demo_next_ms = 0
 
     while running:
         screen.blit(background_surface, (0, 0))
@@ -416,9 +421,28 @@ def main():
         btxt = font.render("Place Order", True, (255, 255, 255))
         btxt_r = btxt.get_rect(center=btn_rect.center)
         screen.blit(btxt, btxt_r)
-        # Start the next section just below the Place Order button (tighter spacing)
-        ycur = btn_rect.bottom
-        ycur += 50
+        # Utility buttons: Reset and Sample Book
+        ycur = btn_rect.bottom + 8
+        reset_rect = pygame.Rect(xbase + 10, ycur, 120, 32)
+        sample_rect = pygame.Rect(xbase + 144, ycur, 120, 32)
+        pygame.draw.rect(screen, (200, 80, 80), reset_rect, border_radius=10)
+        pygame.draw.rect(screen, (80, 120, 200), sample_rect, border_radius=10)
+        rtxt = font.render("Reset", True, (255, 255, 255))
+        stxt = font.render("Sample Book", True, (255, 255, 255))
+        screen.blit(rtxt, rtxt.get_rect(center=reset_rect.center))
+        screen.blit(stxt, stxt.get_rect(center=sample_rect.center))
+        ycur = sample_rect.bottom + 8
+        demo_rect = pygame.Rect(xbase + 10, ycur, 254, 32)
+        pygame.draw.rect(screen, (100, 160, 90), demo_rect, border_radius=10)
+        dtxt = font.render("Run Demo (15 steps)", True, (255, 255, 255))
+        screen.blit(dtxt, dtxt.get_rect(center=demo_rect.center))
+        # Show demo status
+        if demo_running:
+            status_txt = font.render(f"Demo running... steps left: {demo_steps_left}", True, (70, 90, 110))
+            screen.blit(status_txt, (xbase, demo_rect.bottom + 6))
+            ycur = demo_rect.bottom + 26
+        else:
+            ycur = demo_rect.bottom + 12
 
         # --- Stats & Brokerage ---
         # Brokerage per order is fixed at ₹10 for player's orders
@@ -674,8 +698,8 @@ def main():
                 elif btn_rect.collidepoint(mx, my):
                     # Player submits an order; brokerage applies per submission
                     player_orders_submitted += 1
-                    last_order_brokerage = 10
-                    total_brokerage_paid += 10
+                    # Brokerage applies only if any part gets filled
+                    last_order_brokerage = 0
                     # Assign a taker ID to this submission
                     taker_id = TAKER_ID_COUNTER
                     TAKER_ID_COUNTER += 1
@@ -713,6 +737,10 @@ def main():
                         else:
                             player_orders_unfilled_on_submit += 1
                             status = 'open'
+                        # Apply brokerage only when some quantity filled
+                        if filled_qty > 0:
+                            last_order_brokerage = 10
+                            total_brokerage_paid += 10
                         # Log result event
                         log_event({'ts': now_ts(), 'event': 'result', 'actor': 'You', 'taker_id': taker_id,
                                    'order_id': '', 'side': entry_side, 'order_type': entry_typ, 'price': entry_price, 'qty': entry_qty,
@@ -727,6 +755,138 @@ def main():
                         log_event({'ts': now_ts(), 'event': 'result', 'actor': 'You', 'taker_id': taker_id,
                                    'order_id': '', 'side': entry_side, 'order_type': entry_typ, 'price': entry_price, 'qty': entry_qty,
                                    'filled_qty': 0, 'status': 'open', 'note': ''})
+                # Utility buttons behavior
+                elif 'reset_rect' in locals() and reset_rect.collidepoint(mx, my):
+                    # Reset entire simulation state
+                    ORDER_ID_COUNTER = 1
+                    TAKER_ID_COUNTER = 1
+                    order_book = new_order_book()
+                    trade_log = []
+                    fifo_log = []
+                    events_log = []
+                    player_orders_submitted = 0
+                    player_orders_fully_filled = 0
+                    player_orders_partially_filled = 0
+                    player_orders_unfilled_on_submit = 0
+                    last_order_brokerage = 0
+                    total_brokerage_paid = 0
+                    LTP = 1000
+                    entry_typ = "LIMIT"; entry_side = "Buy"; entry_price = 1000; entry_qty = 10
+                    # Reset display/animations
+                    display_bids = {}
+                    display_asks = {}
+                    flash_bids = {}
+                    flash_asks = {}
+                    view_mode = 'executed'
+                    view_scroll_offset = 0
+                    continue
+                elif 'sample_rect' in locals() and sample_rect.collidepoint(mx, my):
+                    # Generate a sample order book snapshot
+                    ORDER_ID_COUNTER = 1
+                    order_book = new_order_book()
+                    # helper to append resting
+                    def add_resting(side, price, qty, is_player=False):
+                        global ORDER_ID_COUNTER
+                        if side == 'bid':
+                            order_book['bids'].append((price, qty, is_player, ORDER_ID_COUNTER))
+                        else:
+                            order_book['asks'].append((price, qty, is_player, ORDER_ID_COUNTER))
+                        # log a submit for visibility
+                        tid = TAKER_ID_COUNTER
+                        log_event({'ts': now_ts(), 'event': 'submit', 'actor': ('You' if is_player else 'Bot'), 'taker_id': tid,
+                                   'order_id': ORDER_ID_COUNTER, 'side': ('Buy' if side=='bid' else 'Sell'), 'order_type': 'LIMIT',
+                                   'price': price, 'qty': qty, 'filled_qty': 0, 'status': 'submitted', 'note': ''})
+                        ORDER_ID_COUNTER += 1
+                    # Populate richer sample: multiple levels, mix of Bot and You (more depth)
+                    # Bids (Buy side)
+                    add_resting('bid', 1000, 8, True)    # You at best bid
+                    add_resting('bid', 1000, 4, False)
+                    add_resting('bid', 999,  6, False)
+                    add_resting('bid', 999,  5, True)
+                    add_resting('bid', 998, 10, False)
+                    add_resting('bid', 998,  7, False)
+                    add_resting('bid', 997, 12, False)
+                    add_resting('bid', 996, 14, False)
+                    add_resting('bid', 995, 11, False)
+                    # Asks (Sell side)
+                    add_resting('ask', 1001, 7, False)   # Best ask
+                    add_resting('ask', 1001, 3, True)
+                    add_resting('ask', 1002, 5, False)
+                    add_resting('ask', 1002, 9, False)
+                    add_resting('ask', 1003, 9, False)
+                    add_resting('ask', 1003, 5, False)
+                    add_resting('ask', 1004, 10, False)
+                    add_resting('ask', 1005, 12, False)
+                    add_resting('ask', 1006, 10, False)
+                    sort_book(order_book)
+                    # Sync display instantly
+                    tb, ta = aggregate_per_price(order_book)
+                    display_bids = {p: float(q) for p, q in tb.items()}
+                    display_asks = {p: float(q) for p, q in ta.items()}
+                    flash_bids = {}
+                    flash_asks = {}
+                    # Set LTP at mid reference
+                    LTP = 1000
+                    view_mode = 'executed'
+                    view_scroll_offset = 0
+                    # Auto-run two demo trades (buy then sell) to showcase LTP and flashes
+                    # Increment TAKER_ID_COUNTER and run demo BUY
+                    demo_tid_buy = TAKER_ID_COUNTER; TAKER_ID_COUNTER += 1
+                    log_event({'ts': now_ts(), 'event': 'submit', 'actor': 'Bot', 'taker_id': demo_tid_buy,
+                               'order_id': '', 'side': 'Buy', 'order_type': 'MARKET', 'price': '', 'qty': 5,
+                               'filled_qty': 0, 'status': 'submitted', 'note': 'demo trade'})
+                    tr_demo_b, _ = place_market_order(order_book, 'buy', 5, False, demo_tid_buy)
+                    if tr_demo_b:
+                        trade_log.extend(tr_demo_b)
+                        append_trades_to_csv(tr_demo_b)
+                        try:
+                            LTP = tr_demo_b[-1][0]
+                        except Exception:
+                            pass
+                        filled_b = sum(q for _p, q, _tl, _cp, _oid, _tid in tr_demo_b)
+                        log_event({'ts': now_ts(), 'event': 'result', 'actor': 'Bot', 'taker_id': demo_tid_buy,
+                                   'order_id': '', 'side': 'Buy', 'order_type': 'MARKET', 'price': '', 'qty': 5,
+                                   'filled_qty': filled_b, 'status': ('filled' if filled_b>=5 else ('partial' if filled_b>0 else 'open')), 'note': 'demo trade'})
+                        for price, _qty, _who, _cp, _roid, _tid in tr_demo_b:
+                            flash_asks[price] = FLASH_FRAMES
+                            log_event({'ts': now_ts(), 'event': 'trade', 'actor': _who, 'taker_id': _tid,
+                                       'order_id': _roid, 'side': 'Buy', 'order_type': 'MARKET', 'price': price, 'qty': _qty,
+                                       'filled_qty': _qty, 'status': 'executed', 'note': _cp})
+                    # Increment TAKER_ID_COUNTER and run demo SELL
+                    demo_tid_sell = TAKER_ID_COUNTER; TAKER_ID_COUNTER += 1
+                    log_event({'ts': now_ts(), 'event': 'submit', 'actor': 'Bot', 'taker_id': demo_tid_sell,
+                               'order_id': '', 'side': 'Sell', 'order_type': 'MARKET', 'price': '', 'qty': 6,
+                               'filled_qty': 0, 'status': 'submitted', 'note': 'demo trade'})
+                    tr_demo_s, _ = place_market_order(order_book, 'sell', 6, False, demo_tid_sell)
+                    if tr_demo_s:
+                        trade_log.extend(tr_demo_s)
+                        append_trades_to_csv(tr_demo_s)
+                        try:
+                            LTP = tr_demo_s[-1][0]
+                        except Exception:
+                            pass
+                        filled_s = sum(q for _p, q, _tl, _cp, _oid, _tid in tr_demo_s)
+                        log_event({'ts': now_ts(), 'event': 'result', 'actor': 'Bot', 'taker_id': demo_tid_sell,
+                                   'order_id': '', 'side': 'Sell', 'order_type': 'MARKET', 'price': '', 'qty': 6,
+                                   'filled_qty': filled_s, 'status': ('filled' if filled_s>=6 else ('partial' if filled_s>0 else 'open')), 'note': 'demo trade'})
+                        for price, _qty, _who, _cp, _roid, _tid in tr_demo_s:
+                            flash_bids[price] = FLASH_FRAMES
+                            log_event({'ts': now_ts(), 'event': 'trade', 'actor': _who, 'taker_id': _tid,
+                                       'order_id': _roid, 'side': 'Sell', 'order_type': 'MARKET', 'price': price, 'qty': _qty,
+                                       'filled_qty': _qty, 'status': 'executed', 'note': _cp})
+                    # Refresh display targets after trades
+                    tb, ta = aggregate_per_price(order_book)
+                    display_bids = {p: float(q) for p, q in tb.items()}
+                    display_asks = {p: float(q) for p, q in ta.items()}
+                    continue
+                elif 'demo_rect' in locals() and demo_rect.collidepoint(mx, my):
+                    # Start step-by-step demo (10 steps, 1 second apart)
+                    demo_running = True
+                    demo_steps_left = 15
+                    demo_next_ms = pygame.time.get_ticks() + 1000
+                    view_mode = 'executed'
+                    view_scroll_offset = 0
+                    continue
             elif event.type == pygame.MOUSEWHEEL:
                 # positive y => scroll up (older); negative y => scroll down (newer)
                 # Normalize: we want up to increase offset, down to decrease
@@ -804,6 +964,61 @@ def main():
 
         pygame.display.flip()
         clock.tick(FPS)
+
+        # --- Demo step runner (after frame flip to maintain cadence) ---
+        if demo_running and pygame.time.get_ticks() >= demo_next_ms:
+            # Execute one random action
+            act_is_limit = (random.random() < 0.6)
+            side = 'buy' if (random.random() < 0.5) else 'sell'
+            qty = random.randint(3, 10)
+            tid = TAKER_ID_COUNTER; TAKER_ID_COUNTER += 1
+            if act_is_limit:
+                px = max(PRICE_MIN, min(PRICE_MAX, LTP + random.randint(-2, 2)))
+                log_event({'ts': now_ts(), 'event': 'submit', 'actor': 'Bot', 'taker_id': tid,
+                           'order_id': '', 'side': ('Buy' if side=='buy' else 'Sell'), 'order_type': 'LIMIT',
+                           'price': px, 'qty': qty, 'filled_qty': 0, 'status': 'submitted', 'note': 'demo'})
+                tr_d, _ = place_limit_order(order_book, side, px, qty, False, tid)
+            else:
+                log_event({'ts': now_ts(), 'event': 'submit', 'actor': 'Bot', 'taker_id': tid,
+                           'order_id': '', 'side': ('Buy' if side=='buy' else 'Sell'), 'order_type': 'MARKET',
+                           'price': '', 'qty': qty, 'filled_qty': 0, 'status': 'submitted', 'note': 'demo'})
+                tr_d, _ = place_market_order(order_book, side, qty, False, tid)
+
+            if tr_d:
+                trade_log.extend(tr_d)
+                append_trades_to_csv(tr_d)
+                try:
+                    LTP = tr_d[-1][0]
+                except Exception:
+                    pass
+                filled = sum(q for _p, q, _tl, _cp, _oid, _tid in tr_d)
+                log_event({'ts': now_ts(), 'event': 'result', 'actor': 'Bot', 'taker_id': tid,
+                           'order_id': '', 'side': ('Buy' if side=='buy' else 'Sell'), 'order_type': ('LIMIT' if act_is_limit else 'MARKET'),
+                           'price': (px if act_is_limit else ''), 'qty': qty, 'filled_qty': filled,
+                           'status': ('filled' if filled>=qty else ('partial' if filled>0 else 'open')), 'note': 'demo'})
+                for price, _qty, _who, _cp, _roid, _tid in tr_d:
+                    if side == 'buy':
+                        flash_asks[price] = FLASH_FRAMES
+                    else:
+                        flash_bids[price] = FLASH_FRAMES
+                    log_event({'ts': now_ts(), 'event': 'trade', 'actor': _who, 'taker_id': _tid,
+                               'order_id': _roid, 'side': ('Buy' if side=='buy' else 'Sell'), 'order_type': ('LIMIT' if act_is_limit else 'MARKET'),
+                               'price': price, 'qty': _qty, 'filled_qty': _qty, 'status': 'executed', 'note': _cp})
+            else:
+                log_event({'ts': now_ts(), 'event': 'result', 'actor': 'Bot', 'taker_id': tid,
+                           'order_id': '', 'side': ('Buy' if side=='buy' else 'Sell'), 'order_type': ('LIMIT' if act_is_limit else 'MARKET'),
+                           'price': (px if act_is_limit else ''), 'qty': qty, 'filled_qty': 0, 'status': 'open', 'note': 'demo'})
+
+            # Sync displays
+            tb, ta = aggregate_per_price(order_book)
+            display_bids = {p: float(q) for p, q in tb.items()}
+            display_asks = {p: float(q) for p, q in ta.items()}
+
+            demo_steps_left -= 1
+            if demo_steps_left <= 0:
+                demo_running = False
+            else:
+                demo_next_ms = pygame.time.get_ticks() + 1000
 
 
 if __name__ == "__main__":
