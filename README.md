@@ -1,3 +1,4 @@
+<img width="1214" height="845" alt="Screenshot 2025-10-31 at 1 06 18 AM" src="https://github.com/user-attachments/assets/5425880d-3ffb-44fc-b514-c3353df4d1a7" />
 pygame>=2.5.2
 tzdata>=2025.2rice‑time priority:
   - Match at best opposite price first
